@@ -812,6 +812,7 @@ fn start_publisher_thread(
             loop {
                 match receiver.recv() {
                     Ok(BlockPublisherMessage::NewBatch(batch)) => {
+                        debug!("Got new batch");
                         // Verify that the batch signer is permitted
                         let chain_head = match commit_store.get_chain_head() {
                             Ok(chain_head) => chain_head,
@@ -820,6 +821,10 @@ fn start_publisher_thread(
                                 continue;
                             }
                         };
+                        debug!(
+                            "Getting identity view with: {}",
+                            hex::encode(chain_head.header().state_root_hash())
+                        );
                         let identity_view = match state_view_factory
                             .create_view::<IdentityView>(chain_head.header().state_root_hash())
                         {
@@ -829,6 +834,7 @@ fn start_publisher_thread(
                                 continue;
                             }
                         };
+                        debug!("Creating perm verifier");
                         let permission_verifier = PermissionVerifier::new(Box::new(identity_view));
                         match permission_verifier.is_batch_signer_authorized(&batch) {
                             Ok(true) => {}
@@ -844,7 +850,7 @@ fn start_publisher_thread(
                                 continue;
                             }
                         }
-
+                        debug!("Verified perms");
                         // Check if the batch is already committed
                         match commit_store.contains_batch(batch.batch().header_signature()) {
                             Ok(true) => {
@@ -860,15 +866,19 @@ fn start_publisher_thread(
                                 continue;
                             }
                         }
+                        debug!("Checked commit store for dup");
 
                         // Add the batch to the pool
                         match pending_batches.write() {
                             Ok(mut pending_batches) => {
+                                debug!("Got pending batches lock");
                                 // If the batch is already in the pool, don't do anything further
                                 // with the batch
                                 if !pending_batches.append(batch.clone()) {
                                     continue;
                                 }
+
+                                debug!("Notifying batch observers");
 
                                 // Notify batch observers
                                 for observer in &batch_observers {
@@ -899,12 +909,17 @@ fn start_publisher_thread(
                             }
                         }
 
+                        debug!("Added pending batch");
+
                         // If currently building a block and it's not already full, schedule the
                         // batch
                         match candidate_block.lock() {
                             Ok(mut candidate_block) => {
+                                debug!("Got candidate block lock");
                                 if let Some(mut candidate_block) = candidate_block.as_mut() {
+                                    debug!("There is a candidate block");
                                     if candidate_block.can_schedule_batch() {
+                                        debug!("Scheduling batch");
                                         if let Err(err) = schedule_batch(
                                             batch,
                                             &commit_store,
